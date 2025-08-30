@@ -1,12 +1,17 @@
-
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import React, { useEffect, useMemo, useState } from "react";
 import { LineChart, Line, ResponsiveContainer } from "recharts";
 import { Play, Pause, Rocket, Wallet, ShieldCheck, ShieldAlert, Ban, DollarSign, Upload, Download } from "lucide-react";
-import { Connection, LAMPORTS_PER_SOL, clusterApiUrl, PublicKey, VersionedTransaction } from "@solana/web3.js";
+import { Connection, LAMPORTS_PER_SOL, clusterApiUrl, PublicKey } from "@solana/web3.js";
 import { ConnectionProvider, WalletProvider, useWallet } from "@solana/wallet-adapter-react";
 import { WalletModalProvider, WalletMultiButton } from "@solana/wallet-adapter-react-ui";
-import { PhantomWalletAdapter, BackpackWalletAdapter, SolflareWalletAdapter, BraveWalletAdapter } from "@solana/wallet-adapter-wallets";
+import {
+  PhantomWalletAdapter,
+  SolflareWalletAdapter,
+  GlowWalletAdapter,
+  ExodusWalletAdapter,
+  LedgerWalletAdapter,
+} from "@solana/wallet-adapter-wallets";
 import { getQuote, getSwapTx, sendAndConfirm, WSOL, simulateTx } from "./lib/jupiter";
 import { getTokenBalanceLamports } from "./lib/tokens";
 import { getMintRisk } from "./lib/risk";
@@ -39,7 +44,16 @@ function useLocal<T>(key: string, init: T) {
 
 export default function App(): JSX.Element {
   const [endpoint, setEndpoint] = useLocal<string>("rpc", clusterApiUrl("mainnet-beta"));
-  const wallets = useMemo(()=>[new PhantomWalletAdapter(), new BackpackWalletAdapter(), new SolflareWalletAdapter(), new BraveWalletAdapter()],[]);
+  const wallets = useMemo(
+    () => [
+      new PhantomWalletAdapter(),
+      new SolflareWalletAdapter(),
+      new GlowWalletAdapter(),
+      new ExodusWalletAdapter(),
+      new LedgerWalletAdapter(),
+    ],
+    []
+  );
   return (
     <ConnectionProvider endpoint={endpoint}>
       <WalletProvider wallets={wallets} autoConnect>
@@ -157,10 +171,11 @@ function Root({endpoint, setEndpoint}:{endpoint:string; setEndpoint:(s:string)=>
     return !res.err;
   }
 
-  // trading helpers
   function needWallet(){
     if (!connected || !publicKey) throw new Error("Подключите кошелек (кнопка Connect справа вверху)");
   }
+
+  // BUY
   async function buyBase(baseMint: string, pair?: DexPair){
     try{
       needWallet();
@@ -168,7 +183,7 @@ function Root({endpoint, setEndpoint}:{endpoint:string; setEndpoint:(s:string)=>
       const mintRisk = await checkMint(baseMint);
       if (!mintRisk.mintAuthorityNull || !mintRisk.freezeAuthorityNull) throw new Error("Mint/freeze authority не сброшены");
       if (preSim) {
-        const okBuy = await preTradeSimBuy(baseMint, Math.max(Math.floor(0.01 * LAMPORTS_PER_SOL), 1000000));
+        const okBuy = await preTradeSimBuy(baseMint, Math.max(Math.floor(0.01 * LAMPORTS_PER_SOL), 1_000_000));
         if (!okBuy) throw new Error("Pre-sim BUY не прошёл");
       }
       setStatus("Котировка...");
@@ -181,7 +196,7 @@ function Root({endpoint, setEndpoint}:{endpoint:string; setEndpoint:(s:string)=>
       const sig = await sendAndConfirm(conn, tx, (t)=>sendTransaction(t, conn), commitment);
       setStatus(`Buy OK: ${sig}`);
 
-      // arm ladder entry price if exists for this mint and pair
+      // arm ladder entry
       if (pair && ladders[baseMint]?.armed) {
         const entryUsd = Number(pair.priceUsd||"0");
         const next = { ...ladders };
@@ -193,6 +208,8 @@ function Root({endpoint, setEndpoint}:{endpoint:string; setEndpoint:(s:string)=>
       }
     }catch(e:any){ setStatus("Ошибка: " + (e?.message || String(e))); }
   }
+
+  // SELL by %
   async function sellBasePct(baseMint: string, pct: number){
     try{
       needWallet();
@@ -212,7 +229,7 @@ function Root({endpoint, setEndpoint}:{endpoint:string; setEndpoint:(s:string)=>
     }catch(e:any){ setStatus("Ошибка: " + (e?.message || String(e))); }
   }
 
-  // Ladder automation: poll price and execute chunk sells
+  // Ladder automation
   useEffect(()=>{
     const id = setInterval(async ()=>{
       try{
@@ -229,7 +246,6 @@ function Root({endpoint, setEndpoint}:{endpoint:string; setEndpoint:(s:string)=>
             if (executed[i]) continue;
             const target = L.entryUsd * L.levels[i];
             if (price >= target){
-              // fire sell for L.parts[i]%
               await sellBasePct(mint, L.parts[i]);
               executed[i] = true;
               changed = true;
@@ -241,7 +257,7 @@ function Root({endpoint, setEndpoint}:{endpoint:string; setEndpoint:(s:string)=>
             setLadders(next);
           }
         }
-      }catch{ /* ignore loop errors*/ }
+      }catch{ /* ignore */ }
     }, 15000);
     return ()=> clearInterval(id);
   }, [ladders, sellPct, slippageBps, maxImpactPct, prioFee, commitment]);
@@ -300,7 +316,6 @@ function Root({endpoint, setEndpoint}:{endpoint:string; setEndpoint:(s:string)=>
   function pctFmt(n:number){ return `${n.toFixed(1)}%`; }
   function dexLink(chainId?: string, pairAddress?: string){ return (!chainId||!pairAddress) ? "https://dexscreener.com" : `https://dexscreener.com/${encodeURIComponent(chainId)}/${encodeURIComponent(pairAddress)}`; }
 
-  // UI
   return (
     <div className="min-h-screen bg-[#0A0B0F] text-white">
       <section className="max-w-6xl mx-auto px-5 pt-6 pb-2">
@@ -495,15 +510,15 @@ function SellRow({onSell, defaultPct}:{onSell:(pct:number)=>void; defaultPct:num
 function MintGuards({mint, conn}:{mint:string; conn:Connection}){
   const [ok, setOk] = useState<null|boolean>(null);
   useEffect(()=>{
-    let st=true;
+    let mounted = true;
     (async()=>{
       try{
         const { mintAuthorityNull, freezeAuthorityNull } = await getMintRisk(conn, mint);
-        setOk(!!(mintAuthorityNull && freezeAuthorityNull));
-      }catch{ setOk(false); }
+        if (mounted) setOk(!!(mintAuthorityNull && freezeAuthorityNull));
+      }catch{ if (mounted) setOk(false); }
     })();
-    return ()=>{ st=false };
-  },[mint]);
+    return ()=>{ mounted=false };
+  },[mint, conn]);
   if (ok===null) return <span className={`${pill}`}>mint?</span>;
   return ok? <span className={`${pill} inline-flex items-center gap-1`}><ShieldCheck className="w-4 h-4"/>mint/freeze null</span> : <span className={`${pill} inline-flex items-center gap-1`}><ShieldAlert className="w-4 h-4"/>authority set</span>;
 }
