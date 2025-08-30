@@ -1,8 +1,8 @@
-
 import { Connection, PublicKey } from "@solana/web3.js";
 
 export async function getTokenBalanceLamports(conn: Connection, owner: PublicKey, mint: PublicKey): Promise<{amount: bigint, decimals: number}> {
-  const resp = await conn.getParsedTokenAccountsByOwner(owner, { mint }, { commitment: "confirmed" });
+  // NOTE: третий аргумент — Commitment, передаём просто строку
+  const resp = await conn.getParsedTokenAccountsByOwner(owner, { mint }, "confirmed");
   let lamports = 0n;
   let decimals = 0;
   for (const a of resp.value) {
