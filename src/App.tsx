@@ -1,17 +1,15 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import React, { useEffect, useMemo, useState } from "react";
 import { LineChart, Line, ResponsiveContainer } from "recharts";
-import { Play, Pause, Rocket, Wallet, ShieldCheck, ShieldAlert, Ban, DollarSign, Upload, Download } from "lucide-react";
+import { Play, Pause, Rocket, Wallet, ShieldCheck, ShieldAlert, DollarSign, Upload, Download } from "lucide-react";
 import { Connection, LAMPORTS_PER_SOL, clusterApiUrl, PublicKey } from "@solana/web3.js";
 import { ConnectionProvider, WalletProvider, useWallet } from "@solana/wallet-adapter-react";
 import { WalletModalProvider, WalletMultiButton } from "@solana/wallet-adapter-react-ui";
 import {
   PhantomWalletAdapter,
   SolflareWalletAdapter,
-  GlowWalletAdapter,
-  ExodusWalletAdapter,
-  LedgerWalletAdapter,
 } from "@solana/wallet-adapter-wallets";
+
 import { getQuote, getSwapTx, sendAndConfirm, WSOL, simulateTx } from "./lib/jupiter";
 import { getTokenBalanceLamports } from "./lib/tokens";
 import { getMintRisk } from "./lib/risk";
@@ -48,9 +46,6 @@ export default function App(): JSX.Element {
     () => [
       new PhantomWalletAdapter(),
       new SolflareWalletAdapter(),
-      new GlowWalletAdapter(),
-      new ExodusWalletAdapter(),
-      new LedgerWalletAdapter(),
     ],
     []
   );
@@ -171,9 +166,12 @@ function Root({endpoint, setEndpoint}:{endpoint:string; setEndpoint:(s:string)=>
     return !res.err;
   }
 
+  // helpers
   function needWallet(){
     if (!connected || !publicKey) throw new Error("Подключите кошелек (кнопка Connect справа вверху)");
   }
+  function pctFmt(n:number){ return `${n.toFixed(1)}%`; }
+  function dexLink(chainId?: string, pairAddress?: string){ return (!chainId||!pairAddress) ? "https://dexscreener.com" : `https://dexscreener.com/${encodeURIComponent(chainId)}/${encodeURIComponent(pairAddress)}`; }
 
   // BUY
   async function buyBase(baseMint: string, pair?: DexPair){
@@ -196,7 +194,7 @@ function Root({endpoint, setEndpoint}:{endpoint:string; setEndpoint:(s:string)=>
       const sig = await sendAndConfirm(conn, tx, (t)=>sendTransaction(t, conn), commitment);
       setStatus(`Buy OK: ${sig}`);
 
-      // arm ladder entry
+      // arm ladder entry (запоминаем вход и пару для авто-тейков)
       if (pair && ladders[baseMint]?.armed) {
         const entryUsd = Number(pair.priceUsd||"0");
         const next = { ...ladders };
@@ -229,7 +227,7 @@ function Root({endpoint, setEndpoint}:{endpoint:string; setEndpoint:(s:string)=>
     }catch(e:any){ setStatus("Ошибка: " + (e?.message || String(e))); }
   }
 
-  // Ladder automation
+  // Ladder automation — опрос цены на Dexscreener и авто-продажи по уровням
   useEffect(()=>{
     const id = setInterval(async ()=>{
       try{
@@ -312,9 +310,6 @@ function Root({endpoint, setEndpoint}:{endpoint:string; setEndpoint:(s:string)=>
     next[mint] = { levels:lvl, parts:prt, armed: next[mint]?.armed||false, entryUsd: next[mint]?.entryUsd, pairAddress: next[mint]?.pairAddress, chainId: next[mint]?.chainId, executed: lvl.map(()=>false) };
     setLadders(next);
   }
-
-  function pctFmt(n:number){ return `${n.toFixed(1)}%`; }
-  function dexLink(chainId?: string, pairAddress?: string){ return (!chainId||!pairAddress) ? "https://dexscreener.com" : `https://dexscreener.com/${encodeURIComponent(chainId)}/${encodeURIComponent(pairAddress)}`; }
 
   return (
     <div className="min-h-screen bg-[#0A0B0F] text-white">
